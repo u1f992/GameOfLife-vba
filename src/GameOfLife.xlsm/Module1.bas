@@ -4,8 +4,8 @@ Option Explicit
 Public Const px As Long = 10
 Public Const Height As Long = 100
 Public Const Width As Long = 100
-Public Const OnColor As Long = 65280 'RGB(0,255,0)
-Public Const OffColor As Long = 0
+Public OnColor As Byte
+Public Const OffColor As Byte = &H0
 
 Sub SetCellsSizeSquare(ByVal Target As Range, ByVal px As Long)
     'Target.Cells(1, 1).Select
@@ -52,7 +52,7 @@ End Sub
 Private Function GameContinue(ByVal Target As Range) As Boolean
     Dim Cell As Range
     For Each Cell In Target
-        If Cell.Interior.Color = OnColor Then
+        If Cell.Interior.Color = HEX2RGB(OnColor) Then
             GameContinue = True
             Exit Function
         End If
@@ -68,10 +68,16 @@ End Function
 Sub Main()
 
     Dim i As Long, j As Long
+    Dim seed As Long: seed = 0: OnColor = GenerateRainbow(seed)
+    Dim PrevOnColor As Byte: PrevOnColor = OnColor
 
+    'fpsを安定させたい
     Dim t As New Timer
+    Dim f As Double: f = 0.05
+    
     'シートを初期化
     Initialize False
+    Range(Cells(1, 1), Cells(Height, Width)).Interior.Color = HEX2RGB(OffColor)
     Stop
     Cells(1, 1).Select
     LockActiveSheet
@@ -84,46 +90,52 @@ Sub Main()
     
     '初回Previousを用意
     For Each Cell In GameSpace
-        If Cell.Interior.Color = OnColor Then Previous(Cell.Row, Cell.Column) = &HFF Else Previous(Cell.Row, Cell.Column) = &H0
+        If Cell.Interior.Color = HEX2RGB(OnColor) Then Previous(Cell.Row, Cell.Column) = OnColor Else Previous(Cell.Row, Cell.Column) = OffColor
     Next Cell
     
-    Do While GameContinue(GameSpace)
+    Do While True 'GameContinue(GameSpace)
         'バッファを初期化
         ReDim Buffer(1 To Height, 1 To Width)
         
-        't.StartTimer
+        t.StartTimer
         For i = LBound(Previous, 1) To UBound(Previous, 1)
             For j = LBound(Previous, 2) To UBound(Previous, 2)
                 
-                If Previous(i, j) = &HFF Then '生きている場合
-                    Select Case Vicinity(Previous, i, j)
+                If Previous(i, j) = PrevOnColor Then '生きている場合
+                    Select Case Vicinity(Previous, i, j, PrevOnColor)
                         Case 2, 3
-                            Buffer(i, j) = &HFF
+                            Buffer(i, j) = OnColor
                         Case Else
-                            Buffer(i, j) = &H0
+                            Buffer(i, j) = OffColor
                     End Select
     
-                ElseIf Previous(i, j) = &H0 Then '死んでいる場合
-                    Select Case Vicinity(Previous, i, j)
+                ElseIf Previous(i, j) = OffColor Then '死んでいる場合
+                    Select Case Vicinity(Previous, i, j, PrevOnColor)
                         Case 3
-                            Buffer(i, j) = &HFF
+                            Buffer(i, j) = OnColor
                         Case Else
-                            Buffer(i, j) = &H0
+                            Buffer(i, j) = OffColor
                     End Select
                 End If
         
             Next j
         Next i
         
+        Do While t.TakeLap < f
+            DoEvents
+        Loop
+        t.StopTimer
+        
         'Debug.Print t.StopTimer
         '描画の更新
-        Application.ScreenUpdating = False
-        UnlockActiveSheet
+        
         UpdateScreen Buffer
-        'LockActiveSheet
-        Application.ScreenUpdating = True
         
         Previous = Buffer
+        
+        PrevOnColor = OnColor
+        seed = seed + 1
+        OnColor = GenerateRainbow(seed)
         
         DoEvents
     Loop
@@ -133,7 +145,6 @@ End Sub
 Public Sub Initialize(ByVal flag As Boolean)
     UnlockActiveSheet
     SetCellsSizeSquare ActiveSheet.Cells, px
-    Range(Cells(1, 1), Cells(Height, Width)).Interior.Color = OffColor
     LockActiveSheet
     
     If Not flag Then GoTo Dispose
@@ -146,17 +157,12 @@ Public Sub Initialize(ByVal flag As Boolean)
     For i = 1 To Height
         For j = 1 To Width
             Randomize
-            If Rnd > 0.9 Then arr(i, j) = &HFF Else arr(i, j) = &H0
+            If Rnd > 0.9 Then arr(i, j) = OnColor Else arr(i, j) = OffColor
             'Debug.Print i & ", " & j
         Next j
     Next i
     
-    
-    Application.ScreenUpdating = False
-    UnlockActiveSheet
     UpdateScreen arr
-    LockActiveSheet
-    Application.ScreenUpdating = True
     
     DoEvents
     
@@ -166,48 +172,55 @@ End Sub
 
 Public Sub UpdateScreen(ByRef Buffer() As Byte)
     
-    Dim i As Long, j As Long
+    Application.ScreenUpdating = False
+    UnlockActiveSheet
     
-    Dim strRngOn As String, strRngOff As String
-    strRngOn = "": strRngOff = ""
+    Dim t As New Timer
+    Dim f As Double: f = 0.3
+    Dim dblWait As Double: dblWait = t.StartTimer
+    
+    Dim i As Long
+    Dim str(0 To 255) As String
+    
     Dim Cell As Range
     
     For Each Cell In Range(Cells(LBound(Buffer, 1), LBound(Buffer, 1)), Cells(UBound(Buffer, 1), UBound(Buffer, 2)))
-        If Buffer(Cell.Row, Cell.Column) = &HFF Then
+        
+        For i = 0 To 255
         
             'Onにするアドレス(String)を集める
             'Rangeは255文字までしか受け付けないので、255文字集まる毎にRange.Interior.Colorを変更
             'UnionによるRangeの結合は、ひとつずつ色を変えるより遅い
-            If Len(strRngOn & Cell.Address) <= 255 Then
-                strRngOn = strRngOn & "," & Cell.Address
-            Else
-                'strRngOnの先頭のコンマを外す
-                Range(Mid(strRngOn, 2)).Interior.Color = OnColor
-                strRngOn = "," & Cell.Address
+            If Buffer(Cell.Row, Cell.Column) = i Then
+                If Len(str(i) & Cell.Address) <= 255 Then
+                    str(i) = str(i) & "," & Cell.Address
+                Else
+                    'str(i)の先頭のコンマを外す
+                    Range(Mid(str(i), 2)).Interior.Color = HEX2RGB(i)
+                    str(i) = "," & Cell.Address
+                End If
+                
+                Exit For
+                
             End If
-        Else
+        Next i
         
-            If Len(strRngOff & Cell.Address) <= 255 Then
-                strRngOff = strRngOff & "," & Cell.Address
-            Else
-                Range(Mid(strRngOff, 2)).Interior.Color = OffColor
-                strRngOff = "," & Cell.Address
-            End If
-        End If
     Next Cell
     
     '余りのRange.Interior.Colorを変更
-    If strRngOn <> "" Then Range(Mid(strRngOn, 2)).Interior.Color = OnColor
-    If strRngOff <> "" Then Range(Mid(strRngOff, 2)).Interior.Color = OffColor
+    For i = 0 To 255
+        If str(i) <> "" Then Range(Mid(str(i), 2)).Interior.Color = HEX2RGB(i)
+        str(i) = ""
+    Next i
     
-'    'fps安定化
-'    '描画範囲が広くなると期待した動作をしない
-'    Dim t As New Timer
-'    Dim dblWait As Double: dblWait = t.StartTimer
-'    Dim f As Double: f = 0.3
+    'fps安定化
+    '描画範囲が広くなると期待した動作をしない
 '    Do While t.TakeLap - dblWait < f
 '        DoEvents
 '    Loop
+    
+    LockActiveSheet
+    Application.ScreenUpdating = True
     
 End Sub
 
@@ -255,39 +268,97 @@ Public Sub RCVisible()
 End Sub
 
 '近傍の生存セル数
-Public Function Vicinity(ByRef Buffer() As Byte, ByVal i As Long, ByVal j As Long) As Long
+Public Function Vicinity(ByRef Buffer() As Byte, ByVal i As Long, ByVal j As Long, ByVal OnColor As Byte) As Long
 
     Vicinity = 0
     
     If i > LBound(Buffer, 1) Then
         If j > LBound(Buffer, 2) Then
-            If Buffer(i - 1, j - 1) = &HFF Then Vicinity = Vicinity + 1 '左上
+            If Buffer(i - 1, j - 1) = OnColor Then Vicinity = Vicinity + 1 '左上
         End If
         
         If j < UBound(Buffer, 2) Then
-            If Buffer(i - 1, j + 1) = &HFF Then Vicinity = Vicinity + 1 '右上
+            If Buffer(i - 1, j + 1) = OnColor Then Vicinity = Vicinity + 1 '右上
         End If
         
-        If Buffer(i - 1, j) = &HFF Then Vicinity = Vicinity + 1 '上
+        If Buffer(i - 1, j) = OnColor Then Vicinity = Vicinity + 1 '上
     End If
     
     If i < UBound(Buffer, 1) Then
         If j > LBound(Buffer, 2) Then
-            If Buffer(i + 1, j - 1) = &HFF Then Vicinity = Vicinity + 1 '左下
+            If Buffer(i + 1, j - 1) = OnColor Then Vicinity = Vicinity + 1 '左下
         End If
         
         If j < UBound(Buffer, 2) Then
-            If Buffer(i + 1, j + 1) = &HFF Then Vicinity = Vicinity + 1 '右下
+            If Buffer(i + 1, j + 1) = OnColor Then Vicinity = Vicinity + 1 '右下
         End If
         
-        If Buffer(i + 1, j) = &HFF Then Vicinity = Vicinity + 1 '下
+        If Buffer(i + 1, j) = OnColor Then Vicinity = Vicinity + 1 '下
     End If
     
     If j > LBound(Buffer, 2) Then
-        If Buffer(i, j - 1) = &HFF Then Vicinity = Vicinity + 1 '左
+        If Buffer(i, j - 1) = OnColor Then Vicinity = Vicinity + 1 '左
     End If
     
     If j < UBound(Buffer, 2) Then
-        If Buffer(i, j + 1) = &HFF Then Vicinity = Vicinity + 1 '右
+        If Buffer(i, j + 1) = OnColor Then Vicinity = Vicinity + 1 '右
     End If
+End Function
+
+'1バイト値をRGBに変換する
+Public Function HEX2RGB(ByVal val As Byte) As Long
+    '上位3bitをR, 3bitをG, 2bitをBに変換
+    'Andでマスク &HE0 = 111 000 00
+    '　　　　　　&H1C = 000 111 00
+    '　　　　　　&H3 = 000 000 11
+    '"\ (2 ^ [桁数])"でシフト
+    '表示できる最大数(RG:7, B:3)で割って、255をかける
+    Dim r As Long, g As Long, b As Long
+    r = Int(CLng((val And &HE0) \ (2 ^ 5)) / 7 * 255)
+    g = Int(CLng((val And &H1C) \ (2 ^ 2)) / 7 * 255)
+    b = Int(CLng(val And &H3) / 3 * 255)
+    HEX2RGB = RGB(r, g, b)
+End Function
+
+'虹色を生成する
+'42で1周する
+'r : 0~7
+'g : 0~7
+'b : 0~3
+Public Function GenerateRainbow(ByVal seed As Long) As Byte
+    
+    Dim r As Long, g As Long, b As Long
+    
+    Do While seed >= 42
+        seed = seed - 42
+    Loop
+    
+    If 0 <= seed And seed < 7 Then
+        r = 7
+        g = 0
+        b = Int(seed / 2)
+    ElseIf 7 <= seed And seed < 14 Then
+        r = 14 - seed
+        g = 0
+        b = 3
+    ElseIf 14 <= seed And seed < 21 Then
+        r = 0
+        g = seed - 14
+        b = 3
+    ElseIf 21 <= seed And seed < 28 Then
+        r = 0
+        g = 7
+        b = Int((28 - seed) / 2)
+    ElseIf 28 <= seed And seed < 35 Then
+        r = seed - 28
+        g = 7
+        b = 0
+    ElseIf 35 <= seed And seed < 42 Then
+        r = 7
+        g = 42 - seed
+        b = 0
+    End If
+    
+    GenerateRainbow = (r * (2 ^ 5)) Or (g * (2 ^ 2)) Or b
+    
 End Function
